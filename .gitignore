@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.log
+*.c3d
+*.vsk
+*.enf
+*.osim
+*.trc
+*.mot
+*.sto
+local-runs/

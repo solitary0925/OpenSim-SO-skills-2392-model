@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenSim Vicon SO"
+  short_description: "按步态支撑期运行SO，比较IK与RRA的肌肉力和激活，并核查异常帧"
+  default_prompt: "使用 $opensim-vicon-so 核查模型、运动和外力，运行SO，比较IK与RRA的肌肉力及激活，并报告失败帧与质量警告。"

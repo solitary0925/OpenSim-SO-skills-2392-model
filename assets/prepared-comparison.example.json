@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "rra_job": "/absolute/path/to/prepared/stance_job",
+  "output_folder": "/absolute/path/to/new/SO_comparison",
+  "opensim_cmd": "/absolute/path/to/opensim-cmd",
+  "measured_mass_kg": null,
+  "routes": ["IK_original_model", "IK_RRA_model_control", "RRA_adjusted_model"],
+  "review_purpose": "technical_pilot",
+  "input_disposition": "Record the actual user decision authorizing this technical test with upstream warnings.",
+  "muscle_strength": {
+    "profile": null,
+    "donor_model": null
+  },
+  "filtering": {
+    "mode": "no_added_filtering",
+    "decision": "Record the applicable user decision; do not assume IK was prefiltered."
+  },
+  "optimizer": {
+    "activation_exponent": 2,
+    "use_muscle_physiology": true,
+    "tolerance": 0.0001,
+    "max_iterations": 100
+  },
+  "actuators": {
+    "optimal_force": 1.0,
+    "control_min": -1000.0,
+    "control_max": 1000.0
+  }
+}
