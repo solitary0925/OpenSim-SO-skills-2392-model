@@ -1,18 +1,20 @@
 {
   "name": "opensim-vicon-so",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "files": {
-    "SKILL.md": "68f84a751038850b242f778cbaac88b9a9bbcb42de959f3e10bde244bb86f16c",
+    "SKILL.md": "b0c5cb4beb80ea7962274daafcbd3f26d40ea21bc49ca7a86e42d360f6bf853b",
     "agents/openai.yaml": "876fa5ae4fd9819a34ce3c85f5c88099bc8fa1c7e0f7493d753db3bd38489183",
-    "assets/prepared-comparison.example.json": "7b7e2657e1ea68e558ee1e7bb65a8e6a69e9de41219dfce94e27a4e319f2548f",
-    "references/execution.md": "83ea206fbcedbff5d97fa8ceaf2555673a138668129c2585df558da25195afac",
-    "references/single-leg.md": "0d10115262768b378ef2035306843096c379a2aa2d99fea7108bdf4167324049",
-    "references/validation.md": "26608b22722b58d6a1eafea582a8a04ac41f8dafa52fa20968582884338b06ea",
-    "references/workflow.md": "09c1cfedb36427f4f069b639cc2fe455a35133db377b3cc6ed031d2a1ffbf911",
+    "assets/prepared-comparison.example.json": "64dee0da7867320b6cab88c8a4e855e84b475571526e9a2fcc79f8065f77bb62",
+    "references/execution.md": "22b6ecc40018d6bd9ef507081df0440e97769a97ba97f6c8fe526cefea474204",
+    "references/input-filtering.md": "491105f8acb4fd55cb6ba7c48a9886e4e209754808c46b5bacb9ba7e13cadbeb",
+    "references/single-leg.md": "cc58ed100082774f497585d23c4434d7856218df54cb3ef20e0b4905e24ab244",
+    "references/validation.md": "8fdd2b42e77a594203ca73122295fa0e87afe0eb9dc9ad9bb5a189654ec8bf0d",
+    "references/workflow.md": "a1d5f6b571550e51822e271732029172ee803481452826c1c30a0e4831a0b013",
+    "scripts/input_filter6.py": "2950a9bebc40666321f3cc3672ae4ddc78b0f383a5a4d91ae40b08bd616a7845",
     "scripts/muscle_strength.py": "ba9bfacf59dcd90821d1307b933251aaebb69f25631e636cb297a870f17eb69c",
-    "scripts/review_so_results.py": "bdf9f1e0cdec4a73ae4dcd71bf8c593f07cea74a0a83fd5b2ed141ff874fccf3",
-    "scripts/run_prepared_comparison.py": "bd8f4457a334b2a3443e14819c488d7e6af550554ba5dfa18465851822b7ee98",
-    "scripts/run_single_leg_so.py": "d78e8de3373cb600357b822a10ca64e9230e822e76c352985cdd6d2cac6fd103",
+    "scripts/review_so_results.py": "41a19cbb52c1f2415906c038b0a7db9922f846f1d0ed0884ba61e1ea5a06a51f",
+    "scripts/run_prepared_comparison.py": "ef97f23056aa815665b4fff4afe40b11c71e0164cae025f2a60f8bb23428a5d0",
+    "scripts/run_single_leg_so.py": "096dbaf3175aa75e69e4f5e7a6a035459eccecefcb6a3c49d1714b9054eddd02",
     "scripts/test_so_review.py": "e577dee7c081981e1b331ed2a539af832653bc7e1615d9ac85a22eb2062cf491"
   }
 }

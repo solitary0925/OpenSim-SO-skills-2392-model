@@ -11,6 +11,7 @@ import opensim as osim
 
 from muscle_strength import ORIGINAL, TRANSFER, prepare_strength_model
 from review_so_results import storage
+from input_filter6 import choice, read as read_filter, sha, verify_receipt
 
 PELVIS = ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation', 'pelvis_tx', 'pelvis_ty', 'pelvis_tz']
 
@@ -171,13 +172,31 @@ def main():
     parser.add_argument('--muscle-strength', choices=[ORIGINAL, TRANSFER], required=True)
     parser.add_argument('--rajagopal-model', type=Path)
     parser.add_argument('--check-only', action='store_true', help='Validate muscle strength inputs without running SO')
+    parser.add_argument('--prepare-only', action='store_true', help='Write the single-leg model, motion and loads without solving SO')
+    parser.add_argument('--filter-decision',type=Path,help='Confirmed input filtering decision JSON')
+    parser.add_argument('--filter-receipt',type=Path,help='Verified prepared Butterworth input receipt')
     args = parser.parse_args()
     if args.check_only:
         _, audit = prepare_strength_model(args.model, args.muscle_strength, args.rajagopal_model)
         print(json.dumps({key: value for key, value in audit.items() if key != 'muscles'}, indent=2))
         return
+    if args.filter_receipt and not args.filter_decision:
+        parser.error('--filter-receipt requires --filter-decision')
+    decision = read_filter(args.filter_decision) if args.filter_decision else None
+    selected = choice(decision) if decision is not None else set()
+    if selected:
+        if not args.filter_receipt:
+            parser.error('Prepare filtered inputs and provide --filter-receipt')
+        xml = ET.parse(args.loads)
+        wrench = (args.loads.parent/xml.findtext('.//datafile')).resolve(strict=True)
+        protected = {str(file.resolve()):sha(file) for file in (args.motion,args.loads,wrench)}
+        verify_receipt(args.filter_receipt,decision,protected)
     job = prepare(args.model, args.motion, args.loads, args.output, args.side, args.plate, args.event,
                   args.initialize_activation, strength_profile=args.muscle_strength, strength_donor=args.rajagopal_model)
+    if decision:
+        (args.output/'filtering_decision.json').write_text(json.dumps(decision,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    if args.prepare_only:
+        return
     raise SystemExit(run(job['setup'], args.opensim_cmd))
 
 

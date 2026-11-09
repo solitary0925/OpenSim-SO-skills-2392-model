@@ -2,7 +2,7 @@
 
 ## Scope and environment
 
-The runner was extracted from the native three-route walking pilot. It accepts a **prepared RRA stance-job directory**, not raw C3D or an arbitrary IK folder. This format currently comes from the local CGM24 RRA workflow, but no other skill needs to be installed merely to read an existing prepared job.
+The runner accepts a **prepared RRA stance-job directory** using the documented CGM24 input contract. An existing prepared job can be read independently of the RRA skill installation.
 
 Required job files:
 
@@ -17,15 +17,15 @@ Python needs OpenSim API, NumPy and SciPy; the native CLI is OpenSim4.5. Use the
 
 ## Configure
 
-Copy `assets/prepared-comparison.example.json` to a run-specific file and replace the named paths and measured mass. Paths are explicit; the bundle has no user-specific drive or subject directory. `routes` can select any of:
+Copy `assets/prepared-comparison.example.json` to a run-specific file and replace the named paths and measured mass. Set `routes` to the routes the user requested:
 
 - `IK_original_model`
 - `IK_RRA_model_control`
 - `RRA_adjusted_model`
 
-The common time grid uses original IK timestamps contained in the RRA export window. RRA is cubic-interpolated to those timestamps without extrapolation or a new low-pass filter. A shorter end due to grid alignment is reported. This is the validated pilot sampling procedure, not proof of alias-free downsampling in every dataset. Both SO motions are restricted to the common window before native differentiation; record endpoint sensitivity.
+Every route has its own verified solve window and frame grid. RRA is cubic-interpolated to original frame timestamps within its native coverage, without extrapolation or a new filter. An IK route uses all original IK samples supported by its own verified loads and contact. The fallback for legacy configurations uses the matched export inputs and their verified scope. If fuller independent IK coverage is available, provide `ik_inputs` for `IK_original_model` rather than inheriting the RRA export window. Supply `motion`, `loads`, `verified_window_s`, `original_time_origin_s`, and a `source_hashes` map for the motion, load XML and its wrench file. Hashes must match the upstream contact-checked files. With only that route selected and those inputs supplied, the job folder needs the original prepared model, stance audit and input manifest. It can be used before an RRA result exists.
 
-Record the actual user purpose/disposition, filtering and contact decisions in configuration; config strings are provenance, not new authorization. Set `review_purpose=technical_pilot` for an explicitly authorized test with upstream warnings. `research_analysis` requires separate documented upstream review clearance and still does not establish biological validity. The initial runner rejects new filtering requests rather than silently ignoring them.
+Record the actual user purpose, filtering and contact decisions. Set `review_purpose=technical_pilot` for an explicitly authorized test with upstream warnings. `research_analysis` requires documented upstream review clearance. Use [input filtering](input-filtering.md) for the supported optional profile and per-route receipts.
 
 ## Muscle strength
 
@@ -52,7 +52,7 @@ The runner refuses to reuse an output directory. It generates one SO and one mat
 - Original muscle bounds retained; use_model_force_set=true.
 - Activation exponent2, physiology=true, tolerance1e-4, maximum100 optimizer iterations per frame.
 - One CoordinateActuator per active coordinate: `optimal_force=1`, controls−1000 to1000; translation in N and rotation in Nm. These broad pilot bounds expose failures and large residual demand. They are not acceptance limits; do not transfer them to other profiles as a scientific recommendation.
-- No added motion or load low-pass filter. Force-zero offsets and upstream processing are reused from prepared inputs.
+- Native low-pass is disabled. Optional external input preprocessing and force-zero offsets are recorded separately.
 - ID reference excludes muscles in the muscle-only model. It is diagnostic and separate from the SO solve.
 
 ## Reviewer outputs
@@ -61,7 +61,7 @@ The runner refuses to reuse an output directory. It generates one SO and one mat
 
 - `SO_review.json`, `SO_review.md`, `route_quality_summary.csv`.
 - `invalid_frames.csv` with native time, original frame and ordinal/total when available, and original stance percentage.
-- `muscle_metrics.csv`: per-muscle common-valid peaks/means, peak times and adjacent-valid-interval force/activation integrals; raw SI units and measured-mass normalization.
+- `muscle_metrics.csv`: per-route muscle peaks, means, peak times and adjacent-valid-interval integrals over each route's own valid samples, with raw SI units and measured-mass normalization.
 - `validated_muscle_curves.csv`: missing values at failed times, never zero-filled.
 - `reserve_vs_ID_reference.csv` when matching native ID results exist.
 

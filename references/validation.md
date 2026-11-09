@@ -1,16 +1,16 @@
-# Version0.1.0 validation and limits
+# Validation and limits
 
-## Validation evidence
+## Verification checks
 
-The initial whole-body adapter was exercised on a partially measured walking stance with three prepared model and motion routes. Independent checks compared native outputs, original timestamps, the common valid window, residual and reserve measures, and protected input checksums. Per-frame failures remained visible even when the solver returned a successful process exit code.
-
-The v0.3.0 muscle strength profiles passed whole-body input preflight and single-leg model preparation using OpenSim 4.5. Four bundled unit tests cover native failure messages, constraint violations, incomplete numerical records, and integration across valid intervals. These checks establish the scope of the implementation tests.
+- The bundled review tests cover native failure flags despite finite storage, large constraint violations, nonfinite or missing output, and integration that never bridges rejected samples.
+- The 6 Hz option was verified for filter response, original timestamps, fixed-origin wrench consistency, file hashes and prepared SO input selection. Full native SO execution with the new option is a separate validation step.
+- A solver can finish and save finite output even when individual frames fail. Review convergence by frame and inspect residual and reserve curves. Label maximum-component summaries explicitly because RMS and peak can come from different axes.
 
 ## Transfer limitations
 
-- One subject, one partial walking stance does not validate running, all subjects, full-stance peaks, arbitrary muscle models or clinical interpretation.
+- Validate the workflow for each movement class and model. A partial walking stance cannot establish full-stance peaks or performance for running.
 - The bundled runner needs the named prepared-job contract. It does not ingest raw C3D/VSK or prepare force-plate assignments and baseline corrections.
-- No added filtering is implemented. A chosen filter needs a validated upstream preparation step with explicit provenance; unfiltered IK can produce poor acceleration/residual behavior.
+- An optional 6 Hz input profile uses the bundled preprocessor and explicit provenance. Recheck derivative and residual behavior for the selected motion and loads.
 - Standard SO neglects activation dynamics and assumes rigid tendons. Running interpretation, especially plantarflexor/Achilles behavior, must acknowledge this.
 - Same-grid interpolation and short-window differentiation can affect accelerations and peak forces; matched windows do not remove endpoint sensitivity or guarantee alias-free resampling.
 - A mass/COM-adjusted model differs from the original. Use the optional control route to disentangle parameter and motion effects; trial-specific masses should not silently become the normalization denominator.

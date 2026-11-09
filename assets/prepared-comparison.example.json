@@ -4,7 +4,8 @@
   "output_folder": "/absolute/path/to/new/SO_comparison",
   "opensim_cmd": "/absolute/path/to/opensim-cmd",
   "measured_mass_kg": null,
-  "routes": ["IK_original_model", "IK_RRA_model_control", "RRA_adjusted_model"],
+  "routes": [],
+  "ik_inputs": null,
   "review_purpose": "technical_pilot",
   "input_disposition": "Record the actual user decision authorizing this technical test with upstream warnings.",
   "muscle_strength": {
@@ -15,6 +16,8 @@
     "mode": "no_added_filtering",
     "decision": "Record the applicable user decision; do not assume IK was prefiltered."
   },
+  "filtering_decision": {"status": "pending", "choice": null, "signals": [], "upstream_filtering": {}, "confirmation_source": ""},
+  "filter_receipts": {},
   "optimizer": {
     "activation_exponent": 2,
     "use_muscle_physiology": true,

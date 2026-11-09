@@ -1,7 +1,4 @@
-"""Configurable, provenance-checked prepared CGM24 native OpenSim SO comparison.
-
-This is a one-case pilot, not an installed skill or a batch acceptance pipeline.
-"""
+"""Run each prepared CGM24 OpenSim SO route over its own verified window."""
 from pathlib import Path
 import csv
 import hashlib
@@ -18,6 +15,7 @@ import opensim as osim
 from scipy.interpolate import CubicSpline
 
 from muscle_strength import prepare_strength_model
+from input_filter6 import PROFILE, NO_ADDED, choice, verify_receipt
 
 JOB = EXPORT = OUT = CLI = None
 SETTINGS = {}
@@ -47,7 +45,7 @@ def storage(p):
 
 def write_motion(p, names, a, degrees):
     with Path(p).open('w', encoding='utf-8', newline='\n') as f:
-        f.write(f'SO_common_grid\nnRows={len(a)}\nnColumns={len(names)}\ninDegrees={degrees}\nendheader\n')
+        f.write(f'SO_motion\nnRows={len(a)}\nnColumns={len(names)}\ninDegrees={degrees}\nendheader\n')
         f.write('\t'.join(names) + '\n')
         np.savetxt(f, a, delimiter='\t', fmt='%.12g')
 
@@ -80,6 +78,91 @@ def fix_meshes(model_file):
     tree.write(model_file, encoding='utf-8', xml_declaration=True)
 
 
+def needs_rra():
+    return set(SETTINGS['routes'])!={'IK_original_model'} or not SETTINGS.get('ik_inputs')
+
+
+def route_inputs(label, window, review):
+    rra_motion = label=='RRA_adjusted_model'
+    independent = SETTINGS.get('ik_inputs') if not rra_motion else None
+    model = JOB/'inputs/base.osim' if label=='IK_original_model' else EXPORT/'RRA_model.osim'
+    motion = Path(independent['motion']) if independent else EXPORT/('RRA_motion.mot' if rra_motion else 'original_IK.mot')
+    loads = Path(independent['loads']) if independent else EXPORT/'ExternalLoads.xml'
+    receipt = SETTINGS.get('filter_receipts',{}).get(label)
+    selected = choice(SETTINGS['filtering_decision']) if 'filtering_decision' in SETTINGS else set()
+    if selected:
+        record = read(receipt)
+        processed = {key:Path(item['path']).resolve() for signal in record['signals'].values()
+                     for key,item in signal['outputs'].items()}
+        protected = {str(file):sha(file) for file in processed.values()}
+        verify_receipt(receipt,SETTINGS['filtering_decision'],protected)
+        if 'kinematics' in selected:
+            source = record['signals']['kinematics']['input']
+            if source['sha256']!=sha(motion):
+                if not rra_motion:
+                    raise ValueError('Filtered motion does not come from this route’s verified IK')
+                original_names,original,_ = storage(motion)
+                regular_names,regular,_ = storage(source['path'])
+                if regular_names!=original_names or not np.allclose(
+                        CubicSpline(original[:,0],original[:,1:],axis=0,extrapolate=False)(regular[:,0]),
+                        regular[:,1:],rtol=1e-8,atol=1e-8):
+                    raise ValueError('Regularized filter source does not match this route’s RRA motion')
+        if 'wrench' in selected:
+            source_tree = ET.parse(loads)
+            source_wrench = loads.parent/source_tree.findtext('.//datafile') if independent else EXPORT/'external_loads.mot'
+            source_hashes = [item['sha256'] for item in record['signals']['wrench']['inputs']]
+            if sha(source_wrench) not in source_hashes:
+                raise ValueError('Filtered wrench does not come from this route’s verified loads')
+        motion = processed.get('motion',motion)
+        loads = processed.get('loads',loads)
+    tree = ET.parse(loads)
+    wrench = ((loads.parent/tree.findtext('.//datafile')) if independent or 'wrench' in selected else EXPORT/'external_loads.mot').resolve(strict=True)
+    if 'wrench' in selected and wrench!=processed['wrench']:
+        raise ValueError('Filtered ExternalLoads XML does not reference the recorded filtered wrench')
+    names,values,header = storage(motion)
+    force_names,force,_ = storage(wrench)
+    external = tree.findall('.//ExternalForce')
+    if not external:
+        raise ValueError('External force definitions missing')
+    for entry in external:
+        if entry.findtext('applied_to_body') not in ('calcn_l','calcn_r'):
+            raise ValueError('Unsupported force application body')
+        if any(entry.findtext(k)!='ground' for k in ('force_expressed_in_body','point_expressed_in_body')):
+            raise ValueError('Ground-expressed prepared loads required')
+        for k in ('force_identifier','point_identifier','torque_identifier'):
+            prefix = entry.findtext(k)
+            if not prefix or any(prefix+axis not in force_names for axis in 'xyz'):
+                raise ValueError('Missing force/COP/torque columns for '+str(prefix))
+    verified = independent['verified_window_s'] if independent else review['actual_window_s']
+    event = window['target_window_s']
+    if not event[0]-1e-9<=verified[0]<verified[1]<=event[1]+1e-9:
+        raise ValueError(f'{label} verified window lies outside the target stance')
+    lo,hi = max(verified[0],values[0,0],force[0,0]),min(verified[1],values[-1,0],force[-1,0])
+    origin = (float(independent['original_time_origin_s']) if independent else
+              float(storage(EXPORT/'original_IK.mot')[1][0,0]))
+    if rra_motion:
+        rate = window['point_rate_hz']
+        grid = origin + np.arange(int(np.ceil((lo-origin-1e-9)*rate)),int(np.floor((hi-origin+1e-9)*rate))+1)/rate
+        grid = np.round(grid,9)
+        grid = grid[(grid>=values[0,0])&(grid<=values[-1,0])]
+        values = np.column_stack([grid,CubicSpline(values[:,0],values[:,1:],axis=0,extrapolate=False)(grid)])
+    else:
+        # Keep the full kinematics file for derivative context and select only this route's verified solve samples.
+        grid = values[(values[:,0]>=lo-1e-9)&(values[:,0]<=hi+1e-9),0]
+    if len(grid)<3:
+        raise ValueError(f'{label} has fewer than three verified samples')
+    if independent:
+        hashes = independent['source_hashes']
+        unchanged = ([motion] if 'kinematics' not in selected else [])+([loads,wrench] if 'wrench' not in selected else [])
+        for file in unchanged:
+            if sha(file)!=hashes.get(str(file)):
+                raise ValueError(f'{label} independently prepared file is missing or has a mismatched hash: {file}')
+    degrees = next(s.split('=')[1].strip().lower() for s in header if s.lower().startswith('indegrees='))
+    files = (model,motion,loads,wrench,*([Path(receipt)] if selected else []))
+    return dict(model=model,names=names,values=values,grid=grid,degrees=degrees,origin=origin,
+                tree=tree,wrench=wrench,files=files,verified=verified)
+
+
 def main():
     assert not OUT.exists(), 'Use a new output folder; no overwrite of past runs.'
     OUT.mkdir(parents=True)
@@ -88,8 +171,13 @@ def main():
     osim.ModelVisualizer.addDirToGeometrySearchPaths(str(EXPORT / 'Geometry'))
     manifest = read(JOB / 'input_manifest.json')
     protected = {**manifest['source_hashes'], **manifest['prepared_inputs']}
-    for p in [JOB/'final_review.json', JOB/'stance_window.json', *[EXPORT/n for n in
-              ['RRA_model.osim', 'RRA_motion.mot', 'original_IK.mot', 'ExternalLoads.xml', 'external_loads.mot']]]:
+    review = read(JOB/'final_review.json') if needs_rra() else {}
+    window = read(JOB/'stance_window.json')
+    available = {label:route_inputs(label,window,review) for label in SETTINGS['routes']}
+    files = [JOB/'stance_window.json',JOB/'job_config.json',*[p for r in available.values() for p in r['files']]]
+    if needs_rra():
+        files.extend((JOB/'final_review.json',EXPORT/'original_IK.mot'))
+    for p in files:
         protected[str(p)] = sha(p)
     strength = SETTINGS.get('muscle_strength')
     donor = strength.get('donor_model') if strength is not None else None
@@ -99,26 +187,9 @@ def main():
     save(OUT/'input_audit_before.json', dict(files=checks, all_unchanged=all(checks.values())))
     assert all(checks.values()), 'Source/provenance mismatch: inspect input audit.'
     assert CLI.is_file()
-    review = read(JOB/'final_review.json')
-    assert review['selected_iteration'] and review['status'].startswith('selected')
-    window = read(JOB/'stance_window.json')
-    assert window['status'] == 'ready'
-    ik_names, ik, ik_head = storage(EXPORT/'original_IK.mot')
-    rr_names, rr, rr_head = storage(EXPORT/'RRA_motion.mot')
-    assert set(ik_names) == set(rr_names)
-    rr = rr[:, [rr_names.index(n) for n in ik_names]]
-    ik_deg = next(s.split('=')[1].strip().lower() for s in ik_head if s.lower().startswith('indegrees='))
-    rr_deg = next(s.split('=')[1].strip().lower() for s in rr_head if s.lower().startswith('indegrees='))
-    assert ik_deg == rr_deg
-    start, end = review['actual_window_s']
-    # Same original marker-rate sample grid for all three routes; no low-pass filter.
-    grid = ik[(ik[:, 0] >= start-1e-9) & (ik[:, 0] <= end+1e-9), 0]
-    assert len(grid) >= 10 and grid[0] >= rr[0, 0]-1e-9 and grid[-1] <= rr[-1, 0]+1e-9
-    a_ik = np.column_stack([grid, CubicSpline(ik[:, 0], ik[:, 1:], axis=0)(grid)])
-    a_rr = np.column_stack([grid, CubicSpline(rr[:, 0], rr[:, 1:], axis=0)(grid)])
-    assert np.max(np.abs(a_ik[:, 1:]-ik[np.searchsorted(ik[:, 0], grid), 1:])) < 1e-7
-    names_f, force, _ = storage(EXPORT/'external_loads.mot')
-    assert force[0, 0] <= grid[0] and force[-1, 0] >= grid[-1]
+    first_route = next(iter(available.values()))
+    grid = first_route['grid']
+    origin = first_route['origin']
     base = osim.Model(str(JOB/'inputs/base.osim')); state=base.initSystem()
     muscles = [base.getMuscles().get(i).getName() for i in range(base.getMuscles().getSize())]
     assert len(muscles) == 92 and base.getForceSet().getSize() == 92
@@ -127,39 +198,36 @@ def main():
     assert len(active) == 18
     job_config=read(JOB/'job_config.json')
     config = dict(subject=job_config['subject'], trial=job_config['trial'], side=job_config['target_side'], stage=SETTINGS['review_purpose'],
-                  source_RRA_job=str(JOB), source_RRA_candidate=review['selected_iteration'],
-                  actual_window_s=[float(grid[0]), float(grid[-1])], samples=len(grid),
+                  source_RRA_job=str(JOB), source_RRA_candidate=review.get('selected_iteration'),
                   marker_rate_hz=window['point_rate_hz'], original_first_frame=window['source_first_original_frame'],
-                  original_time_origin_s=float(ik[0,0]),
-                  total_original_frames=window.get('total_original_frames'), expected_times_s=grid.tolist(), source_run_config=SETTINGS,
+                  original_time_origin_s=origin,
+                  total_original_frames=window.get('total_original_frames'), source_run_config=SETTINGS,
                   target_20N_window_s=window['target_window_s'],
-                  target_percent_range=[100*(float(t)-window['target_window_s'][0])/window['target_duration_s'] for t in [grid[0],grid[-1]]],
-                  sampling='IK original sample times; RRA cubic interpolation onto same grid, no extrapolation; no low-pass added',
-                  derivative_context='Both SO inputs restricted to the same grid/window; endpoint derivative sensitivity retained as warning',
-                  filtering=dict(mode='no_added_filtering', cutoff_Hz=-1,
-                                 source=SETTINGS['filtering']['decision']),
+                  sampling='Independent verified grid per route; native low-pass disabled',
+                  filtering=dict(mode=SETTINGS['filtering']['mode'],native_cutoff_Hz=-1,
+                                 decision=SETTINGS.get('filtering_decision'),receipts=SETTINGS.get('filter_receipts',{})),
                   activation_exponent=SETTINGS['optimizer']['activation_exponent'], use_muscle_physiology=SETTINGS['optimizer']['use_muscle_physiology'], optimizer_tolerance=SETTINGS['optimizer']['tolerance'], optimizer_max_iterations=SETTINGS['optimizer']['max_iterations'],
                   reserve_optimal_force=SETTINGS['actuators']['optimal_force'], reserve_control_bounds=[SETTINGS['actuators']['control_min'],SETTINGS['actuators']['control_max']],
                   reserve_policy='Same one actuator per active coordinate in all routes; N for translation and Nm for rotation; permissive bounds expose infeasibility and are not acceptance criteria',
                   measured_mass_kg=SETTINGS['measured_mass_kg'], normalization_mass='Measured subject mass, NOT each RRA-adjusted mass',
                   original_active_coordinates=active, muscle_names=muscles,
-                  upstream_mass=review['mass'], upstream_fidelity_warnings=review['selected_acceptance']['failures'],
+                  upstream_mass=review.get('mass'), upstream_fidelity_warnings=review.get('selected_acceptance',{}).get('failures',[]),
                   external_forces='Both designated concurrent plates retained; no contact window extension',
                   engine=dict(cli=str(CLI), api_version=osim.GetVersionAndDate()),
-                  interpretation='Paired technical comparison; no statistical inference, research acceptance, CMC, or JRA')
+                  interpretation='Route-specific numerical output; compare saved valid outputs in postprocessing')
+    if all(np.array_equal(grid,r['grid']) and origin==r['origin'] for r in available.values()):
+        config.update(expected_times_s=grid.tolist(),actual_window_s=[float(grid[0]),float(grid[-1])],samples=len(grid))
     save(OUT/'comparison_config.json',config)
     frame_rows=[]
-    for t in grid:
-        frame_rows.append(dict(time_s=float(t), original_frame_float=float(window['source_first_original_frame']+(t-ik[0,0])*window['point_rate_hz']),
-                               target_stance_percent=100*(float(t)-window['target_window_s'][0])/window['target_duration_s']))
+    for label,inputs in available.items():
+        for t in inputs['grid']:
+            frame_rows.append(dict(route=label,time_s=float(t),original_frame_float=float(window['source_first_original_frame']+(t-inputs['origin'])*window['point_rate_hz']),
+                                   target_stance_percent=100*(float(t)-window['target_window_s'][0])/window['target_duration_s']))
     with (OUT/'time_frame_map.csv').open('w',newline='',encoding='utf-8-sig') as f:
         w=csv.DictWriter(f,fieldnames=list(frame_rows[0]));w.writeheader();w.writerows(frame_rows)
-    available=[('IK_original_model',JOB/'inputs/base.osim',a_ik),
-            ('IK_RRA_model_control',EXPORT/'RRA_model.osim',a_ik),
-            ('RRA_adjusted_model',EXPORT/'RRA_model.osim',a_rr)]
-    routes=[r for r in available if r[0] in SETTINGS['routes']]
     all_results={}
-    for label, source, motion in routes:
+    for label,inputs in available.items():
+        source,motion,grid = inputs['model'],inputs['values'],inputs['grid']
         folder=OUT/label; inp=folder/'inputs'; inp.mkdir(parents=True)
         muscle_model = inp/'muscle_model.osim'
         if strength is None:
@@ -171,9 +239,9 @@ def main():
             strength_tree.write(muscle_model, encoding='utf-8', xml_declaration=True)
             save(inp/'muscle_strength_audit.json', audit)
         fix_meshes(muscle_model)
-        write_motion(inp/'motion.mot',ik_names,motion,ik_deg)
-        shutil.copy2(EXPORT/'external_loads.mot',inp/'external_loads.mot')
-        tree=ET.parse(EXPORT/'ExternalLoads.xml'); tree.find('.//datafile').text=(inp/'external_loads.mot').as_posix()
+        write_motion(inp/'motion.mot',inputs['names'],motion,inputs['degrees'])
+        shutil.copy2(inputs['wrench'],inp/'external_loads.mot')
+        tree=inputs['tree']; tree.find('.//datafile').text=(inp/'external_loads.mot').as_posix()
         tree.write(inp/'ExternalLoads.xml',encoding='utf-8',xml_declaration=True)
         model=osim.Model(str(inp/'muscle_model.osim')); st=model.initSystem();cs=model.getCoordinateSet()
         assert model.getMuscles().getSize()==92 and model.getForceSet().getSize()==92
@@ -181,6 +249,8 @@ def main():
         assert [c.getName() for c in coordinates]==active
         assert [model.getMuscles().get(i).getName() for i in range(92)]==muscles
         route=dict(source_model=str(source),source_model_sha256=sha(source),mass_kg=model.getTotalMass(st),
+                   expected_times_s=grid.tolist(),actual_window_s=[float(grid[0]),float(grid[-1])],
+                   original_time_origin_s=inputs['origin'],verified_window_s=inputs['verified'],
                    muscle_count=92, active_coordinates=active, reserve_units={},
                    muscle_bounds={model.getMuscles().get(i).getName():[model.getMuscles().get(i).getMinControl(),model.getMuscles().get(i).getMaxControl()] for i in range(92)})
         for coord in coordinates:
@@ -247,11 +317,29 @@ def configure(path):
             SETTINGS['muscle_strength']['donor_model'] = str((Path(path).resolve().parent/donor).resolve())
     JOB=Path(SETTINGS['rra_job']);EXPORT=JOB/'final_original_frame'
     OUT=Path(SETTINGS['output_folder']);CLI=Path(SETTINGS['opensim_cmd'])
+    independent = SETTINGS.get('ik_inputs')
+    if independent:
+        base = Path(path).resolve().parent
+        for key in ('motion','loads'):
+            independent[key] = str((base/independent[key]).resolve(strict=True))
+        independent['source_hashes'] = {str((base/p).resolve()):h for p,h in independent['source_hashes'].items()}
     for p in [JOB,EXPORT]:
         if OUT==p or p in OUT.parents or OUT in p.parents:
             raise ValueError('Keep a new output folder separate from the source job tree')
-    if SETTINGS['filtering']['mode']!='no_added_filtering':
-        raise ValueError('Version0.1.0 implements no-added-filtering only; prepare and validate any new filter explicitly')
+    mode = SETTINGS['filtering']['mode']
+    if mode not in (NO_ADDED,PROFILE):
+        raise ValueError('Choose no added filtering or the supported 4th-order Butterworth 6 Hz profile')
+    decision = SETTINGS.get('filtering_decision')
+    if decision is not None:
+        choice(decision)
+        if decision['choice']!=mode:
+            raise ValueError('Filter mode and confirmed decision disagree')
+    if mode==PROFILE:
+        choice(decision)
+        receipts = SETTINGS.get('filter_receipts',{})
+        if set(receipts)!=set(SETTINGS['routes']):
+            raise ValueError('Supply a filter receipt for each requested route')
+        SETTINGS['filter_receipts'] = {route:str((Path(path).resolve().parent/file).resolve(strict=True)) for route,file in receipts.items()}
     if not SETTINGS['filtering'].get('decision','').strip() or not SETTINGS.get('input_disposition','').strip():
         raise ValueError('Record actual applicable filtering and input-review decisions')
     allowed={'IK_original_model','IK_RRA_model_control','RRA_adjusted_model'}
@@ -282,19 +370,19 @@ def preflight():
     protected={**m['source_hashes'],**m['prepared_inputs']}
     missing_or_changed=[p for p,h in protected.items() if not Path(p).is_file() or sha(p)!=h]
     if missing_or_changed:raise ValueError('Missing/changed provenance inputs: '+str(missing_or_changed))
-    w=read(JOB/'stance_window.json');r=read(JOB/'final_review.json');c=read(JOB/'job_config.json')
+    w=read(JOB/'stance_window.json');c=read(JOB/'job_config.json')
+    r=read(JOB/'final_review.json') if needs_rra() else {}
     if w['status']!='ready' or w.get('side') not in ['L','R'] or not w.get('plate') or not w.get('contact_witnesses'):
         raise ValueError('Prepared target-side/plate/contact audit missing or not ready')
     if c['target_side']!=w['side']:raise ValueError('Target-side mismatch')
-    if not r.get('selected_iteration') or not r['status'].startswith('selected'):
+    if needs_rra() and (not r.get('selected_iteration') or not r['status'].startswith('selected')):
         raise ValueError('A matched selected RRA export is required by this prepared-job adapter')
     warnings=r.get('selected_acceptance',{}).get('failures',[])+r.get('calibration_warnings',[])
     if SETTINGS['review_purpose']=='research_analysis' and warnings and not SETTINGS.get('upstream_review_cleared',False):
         raise ValueError('Upstream RRA warnings need an explicit research-review disposition')
-    lo,hi=r['actual_window_s'];el,eh=w['target_window_s']
-    if not el-1e-9<=lo<hi<=eh+1e-9:raise ValueError('Export outside original stance event')
+    inputs = {label:route_inputs(label,w,r) for label in SETTINGS['routes']}
     models=[]
-    for file in [JOB/'inputs/base.osim',EXPORT/'RRA_model.osim']:
+    for file in dict.fromkeys(route['model'] for route in inputs.values()):
         strength_info = None
         if 'muscle_strength' in SETTINGS:
             strength = SETTINGS['muscle_strength']
@@ -315,23 +403,8 @@ def preflight():
             if not np.isfinite(vals).all() or (vals<0).any():raise ValueError('Invalid body mass/inertia')
         models.append(dict(file=str(file),mass_kg=model.getTotalMass(s),active=active,
                            muscle_strength=strength_info))
-    motions=[]
-    for file in [EXPORT/'original_IK.mot',EXPORT/'RRA_motion.mot',EXPORT/'external_loads.mot']:
-        names,arr,header=storage(file)
-        if arr[0,0]>lo+1e-7 or arr[-1,0]<hi-1e-7:raise ValueError('Motion/load does not cover export: '+str(file))
-        motions.append(dict(file=str(file),samples=len(arr),start=float(arr[0,0]),end=float(arr[-1,0])))
-    loads=ET.parse(EXPORT/'ExternalLoads.xml').getroot()
-    fs=loads.findall('.//ExternalForce')
-    if not fs:raise ValueError('External force definitions missing')
-    force_names,_,_=storage(EXPORT/'external_loads.mot')
-    for f in fs:
-        if f.findtext('applied_to_body') not in ['calcn_l','calcn_r']:raise ValueError('Unsupported force application body')
-        for field in ['force_expressed_in_body','point_expressed_in_body']:
-            if f.findtext(field)!='ground':raise ValueError('Ground-expressed prepared loads required')
-        for field in ['force_identifier','point_identifier','torque_identifier']:
-            prefix=f.findtext(field)
-            if not prefix or any(prefix+axis not in force_names for axis in ['x','y','z']):
-                raise ValueError('Missing force/COP/torque columns for '+str(prefix))
+    motions=[dict(route=label,samples=len(v['grid']),start=float(v['grid'][0]),end=float(v['grid'][-1]))
+             for label,v in inputs.items()]
     return dict(ready=True,native_version=(version.stdout+version.stderr).strip(),api_version=osim.GetVersionAndDate(),
                 protected_files=len(protected),models=models,motions=motions,upstream_warnings=warnings,
                 limitation='Prepared contact/zero/transform decisions must also be reviewed; this is not C3D revalidation')
